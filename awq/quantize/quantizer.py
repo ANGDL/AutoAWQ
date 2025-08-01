@@ -71,11 +71,11 @@ class AwqQuantizer:
             n_samples=self.max_calib_samples, max_seq_len=self.max_calib_seq_len
         )
 
-    def pseudo_quantize_tensor(self, w: torch.Tensor):
+    def pseudo_quantize_tensor(self, w: torch.Tensor, group_size):
         org_w_shape = w.shape
-        if self.group_size > 0:
-            assert org_w_shape[-1] % self.group_size == 0, f"org_w_shape ({org_w_shape[-1]}) must be a multiple of group_size ({self.group_size})!"
-            w = w.reshape(-1, self.group_size)
+        if group_size > 0:
+            assert org_w_shape[-1] % group_size == 0, f"org_w_shape ({org_w_shape[-1]}) must be a multiple of group_size ({group_size})!"
+            w = w.reshape(-1, group_size)
         assert w.dim() == 2
         assert torch.isnan(w).sum() == 0
 
@@ -230,13 +230,16 @@ class AwqQuantizer:
             linear_layer = linear_layer.to(get_best_device()).half()
 
             linear_layer.weight.data, scales, zeros = self.pseudo_quantize_tensor(
-                linear_layer.weight.data
+                linear_layer.weight.data,
+                self.group_size
             )
 
             if self.version == "gemm":
                 scales = scales.t().contiguous()
                 if zeros is not None:
                     zeros = zeros.t().contiguous()
+                else:
+                    zeros = torch.zeros_like(scales).to(scales.device)
                 q_linear_module = WQLinear_GEMM
 
             elif self.version == "gemv":
@@ -254,7 +257,7 @@ class AwqQuantizer:
             q_linear = q_linear_module.from_linear(
                 linear=linear_layer,
                 w_bit=self.w_bit,
-                group_size=self.group_size,
+                group_size=self.group_size if self.group_size > 0 else linear_layer.weight.data.shape[-1],
                 init_only=False,
                 scales=scales,
                 zeros=zeros,
@@ -316,7 +319,8 @@ class AwqQuantizer:
         weight = torch.cat([_m.weight for _m in layers], dim=0)
         org_shape = weight.shape
         # The weights are reshaped to be organised by quantization group
-        weight = weight.view(-1, self.group_size)
+        if self.group_size > 0:
+            weight = weight.view(-1, self.group_size)
         # Calculates the relative magnitude of the weights within each of the quantization groups,
         # and rescales each group individually so that each group has weights on a 0-1 scale.
         w_scale = weight.abs() / (weight.abs().amax(dim=1, keepdim=True) + 1e-6)
@@ -416,7 +420,7 @@ class AwqQuantizer:
             for fc in linears2scale:
                 fc.weight.mul_(scales_view)
                 fc.weight.data = (
-                    self.pseudo_quantize_tensor(fc.weight.data)[0] / scales_view
+                    self.pseudo_quantize_tensor(fc.weight.data, self.group_size)[0] / scales_view
                 )
 
             # W * X
@@ -534,7 +538,7 @@ class AwqQuantizer:
                 max_val = org_max_val * (1 - i_s / n_grid)
                 min_val = -max_val
                 cur_w = torch.clamp(w, min_val, max_val)
-                q_w = self.pseudo_quantize_tensor(cur_w)[0]
+                q_w = self.pseudo_quantize_tensor(cur_w, group_size=group_size)[0]
                 cur_out = (input_feat * q_w).sum(dim=-1)
 
                 # co, 1, n_group, 1
