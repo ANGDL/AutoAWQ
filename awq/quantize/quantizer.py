@@ -157,7 +157,7 @@ class AwqQuantizer:
             # Transformers >= 4.48.0 requires positional embeddings should be computed before forward pass
             if (
                 transformers.__version__ >= "4.48.0"
-                and self.module_kwargs.get("position_embeddings") is None
+                and self.module_kwargs.get("position_embeddings") is None and hasattr(self.model.model, "rotary_emb")
             ):
                 self.module_kwargs["position_embeddings"] = self.model.model.rotary_emb(
                     self.inps, self.module_kwargs["position_ids"]
