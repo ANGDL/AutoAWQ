@@ -97,8 +97,10 @@ class AwqQuantizer:
             max_int = 2 ** (self.w_bit - 1) - 1
             min_int = -(2 ** (self.w_bit - 1))
             scales = max_val / max_int
-            zeros = None
-            w = torch.clamp(torch.round(w / scales), min_int, max_int) * scales
+            zeros = torch.zeros_like(scales, device=scales.device) + 8
+            w = (
+                torch.clamp(torch.round(w / scales) + zeros, 0, 2**self.w_bit - 1) - zeros
+            ) * scales
 
         assert torch.isnan(scales).sum() == 0
         assert torch.isnan(w).sum() == 0
@@ -238,8 +240,6 @@ class AwqQuantizer:
                 scales = scales.t().contiguous()
                 if zeros is not None:
                     zeros = zeros.t().contiguous()
-                else:
-                    zeros = torch.zeros_like(scales).to(scales.device)
                 q_linear_module = WQLinear_GEMM
 
             elif self.version == "gemv":
