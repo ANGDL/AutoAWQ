@@ -46,6 +46,7 @@ class AwqQuantizer:
         max_calib_samples=128,
         max_calib_seq_len=512,
         max_chunk_memory=1024 * 1024 * 1024,
+        act_bits=None,
     ) -> None:
         self.awq_model = awq_model
         self.model = model
@@ -70,8 +71,14 @@ class AwqQuantizer:
         self.modules, self.module_kwargs, self.inps = self.init_quant(
             n_samples=self.max_calib_samples, max_seq_len=self.max_calib_seq_len
         )
+        self.act_bits = act_bits
+        assert act_bits == 4 or act_bits == 8, "act_bits only support 4 or 8"
 
-    def pseudo_quantize_tensor(self, w: torch.Tensor, group_size):
+    def pseudo_quantize_tensor(self, w: torch.Tensor, group_size, zero_point=None, w_bit=None):
+        if zero_point is None:
+            zero_point = self.zero_point
+        if w_bit is None:
+            w_bit = self.w_bit
         org_w_shape = w.shape
         if group_size > 0:
             assert org_w_shape[-1] % group_size == 0, f"org_w_shape ({org_w_shape[-1]}) must be a multiple of group_size ({group_size})!"
@@ -80,10 +87,10 @@ class AwqQuantizer:
         assert torch.isnan(w).sum() == 0
 
         # zero point quantization
-        if self.zero_point:
+        if zero_point:
             max_val = w.amax(dim=1, keepdim=True)
             min_val = w.amin(dim=1, keepdim=True)
-            max_int = 2**self.w_bit - 1
+            max_int = 2**w_bit - 1
             min_int = 0
             scales = (max_val - min_val).clamp(min=1e-5) / max_int
             zeros = (-torch.round(min_val / scales)).clamp_(min_int, max_int)
@@ -94,12 +101,12 @@ class AwqQuantizer:
         else:
             max_val = w.abs().amax(dim=1, keepdim=True)
             max_val = max_val.clamp(min=1e-5)
-            max_int = 2 ** (self.w_bit - 1) - 1
-            min_int = -(2 ** (self.w_bit - 1))
+            max_int = 2 ** (w_bit - 1) - 1
+            min_int = -(2 ** (w_bit - 1))
             scales = max_val / max_int
-            zeros = torch.zeros_like(scales, device=scales.device) + 8
+            zeros = torch.zeros_like(scales, device=scales.device) + (2 ** (w_bit - 1))
             w = (
-                torch.clamp(torch.round(w / scales) + zeros, 0, 2**self.w_bit - 1) - zeros
+                torch.clamp(torch.round(w / scales) + zeros, 0, 2**w_bit - 1) - zeros
             ) * scales
 
         assert torch.isnan(scales).sum() == 0
@@ -332,7 +339,14 @@ class AwqQuantizer:
 
         # [STEP 2]: Compute per-channel mean of the input activation with chunking
         # move inp to cpu to avoid memory leak
-        inp_flat = inp.cpu().abs().view(-1, inp.shape[-1])
+        inp_act = None
+        inp_shape = inp.shape
+        if self.act_bits is not None:
+            inp_act = self.pseudo_quantize_tensor(inp.reshape(-1, inp_shape[-1]), -1, False, self.act_bits)[0]
+            inp_flat = inp_act.cpu().abs()
+        else:
+            inp_flat = inp.cpu().abs().view(-1, inp.shape[-1])
+            
         num_elements = inp_flat.size(0)
         num_channels = inp_flat.size(1)
         element_size_bytes = inp_flat.element_size() * 2 # multiplied by 2 for FP32
@@ -357,8 +371,10 @@ class AwqQuantizer:
             module_kwargs = self._sanitize_kwargs(kwargs, module2inspect)
             fp16_output = self._module_forward(inp, module2inspect, module_kwargs)
             fp16_output = fp16_output.clip(torch.finfo(fp16_output.dtype).min, torch.finfo(fp16_output.dtype).max)
-
+            
         # [STEP 4]: Compute loss
+        if inp_act is not None:
+            inp = inp_act.reshape(inp_shape)
         best_scales = self._compute_best_scale(
             inp, w_mean, x_mean, module2inspect, layers, fp16_output, module_kwargs
         )
