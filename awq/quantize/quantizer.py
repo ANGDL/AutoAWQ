@@ -46,7 +46,8 @@ class AwqQuantizer:
         max_calib_samples=128,
         max_calib_seq_len=512,
         max_chunk_memory=1024 * 1024 * 1024,
-        act_bits=None,
+        act_bit=None,
+        only_smooth=False
     ) -> None:
         self.awq_model = awq_model
         self.model = model
@@ -71,8 +72,10 @@ class AwqQuantizer:
         self.modules, self.module_kwargs, self.inps = self.init_quant(
             n_samples=self.max_calib_samples, max_seq_len=self.max_calib_seq_len
         )
-        self.act_bits = act_bits
-        assert act_bits == 4 or act_bits == 8, "act_bits only support 4 or 8"
+        self.act_bit = act_bit
+        if act_bit is not None and act_bit not in [4, 8]:
+            raise Exception( "act_bit only support 4 or 8")
+        self.only_smooth = only_smooth
 
     def pseudo_quantize_tensor(self, w: torch.Tensor, group_size, zero_point=None, w_bit=None):
         if zero_point is None:
@@ -207,20 +210,21 @@ class AwqQuantizer:
             scales_list = append_str_prefix(
                 scales_list, get_op_name(self.model, self.modules[i]) + "."
             )
+            
+            if not self.only_smooth:
+                # [STEP 3]: Compute and apply clipping list
+                if self.apply_clip:
+                    clip_list = self._search_best_clip(
+                        self.modules[i], named_linears, input_feat
+                    )
+                    apply_clip(self.modules[i], clip_list)
+                    clip_list = append_str_prefix(
+                        clip_list, get_op_name(self.model, self.modules[i]) + "."
+                    )
 
-            # [STEP 3]: Compute and apply clipping list
-            if self.apply_clip:
-                clip_list = self._search_best_clip(
-                    self.modules[i], named_linears, input_feat
-                )
-                apply_clip(self.modules[i], clip_list)
-                clip_list = append_str_prefix(
-                    clip_list, get_op_name(self.model, self.modules[i]) + "."
-                )
-
-            # [STEP 4]: Quantize weights
-            if not self.export_compatible:
-                self._apply_quant(self.modules[i], named_linears)
+                # [STEP 4]: Quantize weights
+                if not self.export_compatible:
+                    self._apply_quant(self.modules[i], named_linears)
 
             clear_memory()
 
@@ -341,8 +345,8 @@ class AwqQuantizer:
         # move inp to cpu to avoid memory leak
         inp_act = None
         inp_shape = inp.shape
-        if self.act_bits is not None:
-            inp_act = self.pseudo_quantize_tensor(inp.reshape(-1, inp_shape[-1]), -1, False, self.act_bits)[0]
+        if self.act_bit is not None:
+            inp_act = self.pseudo_quantize_tensor(inp.reshape(-1, inp_shape[-1]), -1, False, self.act_bit)[0]
             inp_flat = inp_act.cpu().abs()
         else:
             inp_flat = inp.cpu().abs().view(-1, inp.shape[-1])
