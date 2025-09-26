@@ -343,14 +343,7 @@ class AwqQuantizer:
 
         # [STEP 2]: Compute per-channel mean of the input activation with chunking
         # move inp to cpu to avoid memory leak
-        inp_act = None
-        inp_shape = inp.shape
-        if self.act_bit is not None:
-            inp_act = self.pseudo_quantize_tensor(inp.reshape(-1, inp_shape[-1]), -1, False, self.act_bit)[0]
-            inp_flat = inp_act.cpu().abs()
-        else:
-            inp_flat = inp.cpu().abs().view(-1, inp.shape[-1])
-            
+        inp_flat = inp.cpu().abs().view(-1, inp.shape[-1])
         num_elements = inp_flat.size(0)
         num_channels = inp_flat.size(1)
         element_size_bytes = inp_flat.element_size() * 2 # multiplied by 2 for FP32
@@ -375,13 +368,32 @@ class AwqQuantizer:
             module_kwargs = self._sanitize_kwargs(kwargs, module2inspect)
             fp16_output = self._module_forward(inp, module2inspect, module_kwargs)
             fp16_output = fp16_output.clip(torch.finfo(fp16_output.dtype).min, torch.finfo(fp16_output.dtype).max)
-            
+
         # [STEP 4]: Compute loss
-        if inp_act is not None:
-            inp = inp_act.reshape(inp_shape)
-        best_scales = self._compute_best_scale(
-            inp, w_mean, x_mean, module2inspect, layers, fp16_output, module_kwargs
-        )
+        if self.act_bit is not None:
+            # Register a forward_pre_hook to quantize Linear layer input activations
+            def quantize_input_hook(module, input):
+                x = input[0]
+                x_shape = x.shape
+                x_q, _, _ = self.pseudo_quantize_tensor(x.reshape(-1, x_shape[-1]), self.group_size, w_bit=self.act_bit)
+                return (x_q.reshape(x_shape),) + input[1:]
+
+            hook_handles = []
+            try:
+                for fc in layers:
+                    handle = fc.register_forward_pre_hook(quantize_input_hook)
+                    hook_handles.append(handle)
+
+                best_scales = self._compute_best_scale(
+                    inp, w_mean, x_mean, module2inspect, layers, fp16_output, module_kwargs
+                )
+            finally:
+                for handle in hook_handles:
+                    handle.remove()
+        else:
+            best_scales = self._compute_best_scale(
+                inp, w_mean, x_mean, module2inspect, layers, fp16_output, module_kwargs
+            )
 
         return (
             get_op_name(module, prev_op),
