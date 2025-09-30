@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from setuptools import setup, find_packages
+from setuptools import setup, find_packages, find_namespace_packages
 
 AUTOAWQ_VERSION = "0.2.9"
 
@@ -43,8 +43,17 @@ requirements = [
     "huggingface_hub>=0.26.5",
 ]
 
+def _all_packages():
+    # Include both regular packages (e.g., awq) and implicit namespace packages (experimental/*)
+    # - find_packages: finds classic packages that contain __init__.py (awq)
+    # - find_namespace_packages: finds PEP 420 namespace packages without __init__.py (experimental)
+    pkgs = set()
+    pkgs.update(find_packages(include=["awq*"]))
+    pkgs.update(find_namespace_packages(include=["experimental*"]))
+    return sorted(pkgs)
+
 setup(
-    packages=find_packages(),
+    packages=_all_packages(),
     install_requires=requirements,
     extras_require={
         "eval": ["lm_eval==0.4.1", "tabulate", "protobuf", "evaluate", "scipy"],
