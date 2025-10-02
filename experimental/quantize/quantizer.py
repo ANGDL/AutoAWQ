@@ -1,7 +1,6 @@
 from collections import defaultdict
 import functools
 import logging
-import experimental.quantize.scale
 import torch
 from awq.quantize.quantizer import AwqQuantizer as BaseQuantizer
 
