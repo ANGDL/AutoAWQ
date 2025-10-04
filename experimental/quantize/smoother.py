@@ -85,7 +85,7 @@ class SmoothQuantizer(BaseQuantizer):
         if self.group_size > 0:
             weight = weight.view(-1, self.group_size)
 
-        w_scale = weight.abs().amax(dim=0).clamp(min=1e-6)
+        w_scale = weight.abs_().amax(dim=0).clamp(min=1e-4)
         clear_memory(weight)
 
         # [STEP 2]: Compute per-channel mean of the input activation with chunking
