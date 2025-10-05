@@ -142,10 +142,6 @@ class SmoothQuantizer(BaseQuantizer):
                 inp, w_scale, x_scale, module2inspect, layers, fp16_output, module_kwargs
             )
             
-        best_scales = self._compute_best_scale(
-            inp, w_scale, x_scale, module2inspect, layers, fp16_output, module_kwargs
-        )
-
         return (
             get_op_name(module, prev_op),
             tuple([get_op_name(module, m) for m in layers]),
