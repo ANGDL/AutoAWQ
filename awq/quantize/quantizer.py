@@ -76,6 +76,7 @@ class AwqQuantizer:
         if act_bit is not None and act_bit not in [4, 8]:
             raise Exception( "act_bit only support 4 or 8")
         self.only_smooth = only_smooth
+        self.not_converted_layers = []
 
     def pseudo_quantize_tensor(self, w: torch.Tensor, group_size, zero_point=None, w_bit=None):
         if zero_point is None:
@@ -191,9 +192,13 @@ class AwqQuantizer:
             named_linears = get_named_linears(self.modules[i])
 
             # Filter out the linear layers we don't want to exclude
+            not_converted_layers = []
             named_linears = exclude_layers_to_not_quantize(
-                named_linears, self.modules_to_not_convert
+                named_linears, self.modules_to_not_convert, not_converted_layers
             )
+            self.not_converted_layers.extend(append_str_prefix(
+                not_converted_layers, get_op_name(self.model, self.modules[i]) + "."
+            ))
 
             input_feat = self._get_input_feat(self.modules[i], named_linears)
             clear_memory()

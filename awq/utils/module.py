@@ -1,5 +1,6 @@
 import torch.nn as nn
 import importlib
+import re
 
 def try_import(module_name):
     try:
@@ -53,12 +54,27 @@ def append_str_prefix(x, prefix):
         return x
 
 
-def exclude_layers_to_not_quantize(linear_layers, modules_to_not_convert):
+def exclude_layers_to_not_quantize(linear_layers, modules_to_not_convert, updated_not_convert_layers):
     if modules_to_not_convert is None:
         return linear_layers
 
     filtered_layers = {}
     for name, linear_layer in linear_layers.items():
-        if not any(key in name for key in modules_to_not_convert):
+        should_exclude = False
+        for key in modules_to_not_convert:
+            try:
+                # Convert wildcard pattern to regex
+                pattern = re.escape(key).replace(r'\*', '.*').replace(r'\$', '$')
+                if re.search(pattern, name):
+                    should_exclude = True
+                    break
+            except re.error:
+                if key in name:
+                    should_exclude = True
+                    break
+        
+        if not should_exclude:
             filtered_layers[name] = linear_layer
+        else:
+            updated_not_convert_layers.append(name)
     return filtered_layers
