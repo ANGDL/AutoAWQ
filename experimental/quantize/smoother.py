@@ -1,3 +1,4 @@
+import os
 from typing import Dict, List, Optional
 
 import torch
@@ -7,9 +8,10 @@ from awq.utils.module import (
     get_op_name,
     set_op_by_name,
 )
-from experimental.quantize.quantizer import MoeFixedQuantizer as BaseQuantizer
+from experimental.quantize.quantizer import ExpandedQuantizer as BaseQuantizer
 from experimental.modules.linear.gemm import WQ8Linear_GEMM
-
+from awq.utils.module import append_str_prefix
+from experimental.utils.logger import awq_logger as logger
 
 class SmoothQuantizer(BaseQuantizer):
     def __init__(
@@ -33,7 +35,6 @@ class SmoothQuantizer(BaseQuantizer):
         max_calib_seq_len=512,
         max_chunk_memory=1024 * 1024 * 1024,
         act_bit=None,
-        only_smooth=False
     ):
         super().__init__(
             awq_model,
@@ -55,7 +56,6 @@ class SmoothQuantizer(BaseQuantizer):
             max_calib_seq_len,
             max_chunk_memory,
             act_bit,
-            only_smooth
         )
 
     @torch.no_grad()
@@ -189,22 +189,49 @@ class SmoothQuantizer(BaseQuantizer):
 
         return w, scales, zeros
     
-    def _apply_quant(self, module, named_linears: Dict[str, nn.Linear]):
+    def _quantize_impl(
+        self,
+        name: str,
+        linear_layer: nn.Linear,
+        input_feat: Optional[torch.Tensor],
+    ):
+        if os.getenv("AWQ_DEBUG"):
+            inp = input_feat.to(linear_layer.weight.dtype).to(linear_layer.weight.device)
+            out = linear_layer(inp)
+
+        linear_layer.weight.data, scales, zeros = self.pseudo_quantize_tensor(
+            linear_layer.weight.data,
+            self.group_size
+        )
+
+        if os.getenv("AWQ_DEBUG"):
+            qout = linear_layer(inp)
+            logger.debug(f"Pred Loss: {self._compute_loss(out, qout, device=out.device) :<.7f}")
+
+        return scales, zeros
+
+    @torch.no_grad()
+    def _apply_quant(
+        self,
+        module,
+        named_linears: Dict[str, nn.Linear],
+        input_feat_dict: Optional[Dict[str, torch.Tensor]] = None,
+    ):
         for name, linear_layer in named_linears.items():
+            layer_name = append_str_prefix(name, get_op_name(self.model, module) + '.')
+            logger.debug(f"Quantizing: {layer_name}")
+
             # NOTE: small regression in perplexity if linear layer uses .cpu().float()
             linear_layer = linear_layer.to(get_best_device()).half()
 
-            linear_layer.weight.data, scales, zeros = self.pseudo_quantize_tensor(
-                linear_layer.weight.data,
-                self.group_size
-            )
+            layer_inp = input_feat_dict[name] if (input_feat_dict is not None and name in input_feat_dict) else None
+            scales, zeros = self._quantize_impl(name, linear_layer, layer_inp)
 
             if self.version == "gemm":
                 scales = scales.contiguous()
                 if zeros is not None:
                     zeros = zeros.contiguous()
                 q_linear_module = WQ8Linear_GEMM
-
             else:
                 raise ValueError(f"Unknown version {self.version}")
 

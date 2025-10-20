@@ -8,10 +8,10 @@ class WQ8Linear_GEMM(nn.Module):
         self, w_bit, group_size, in_features, out_features, bias, dev, training=False
     ):
         super().__init__()
+    
+        if w_bit not in [4, 8]:
+            raise NotImplementedError("Only 4-bit and 8-bit are supported for WQ8Linear_GEMM.")
 
-        if w_bit not in [8]:
-            raise NotImplementedError("Only 8-bit are supported for WQ8Linear_GEMM.")
-        
         self.in_features = in_features
         self.out_features = out_features
         self.w_bit = w_bit
@@ -76,25 +76,7 @@ class WQ8Linear_GEMM(nn.Module):
         return awq_linear
 
     def forward(self, x):
-        out_shape = x.shape[:-1] + (self.out_features,)
-
-        input_dtype = x.dtype
-        if input_dtype != torch.float16:
-            x = x.half()
-
-        if self.training:
-            out = (x @ (self.weight.float() * self.weight_scale)).half()
-        else:
-            with torch.no_grad():
-                out = (x @ (self.weight.float() * self.weight_scale)).half()
-
-        if self.bias is not None:
-            out = out + self.bias
-
-        if input_dtype != torch.float16:
-            out = out.to(dtype=input_dtype)
-
-        return out.reshape(out_shape)
+        raise NotImplementedError("GEMM kernel is not implemented yet.")
 
     def extra_repr(self) -> str:
         return (

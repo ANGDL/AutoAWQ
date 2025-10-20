@@ -47,7 +47,6 @@ class AwqQuantizer:
         max_calib_seq_len=512,
         max_chunk_memory=1024 * 1024 * 1024,
         act_bit=None,
-        only_smooth=False
     ) -> None:
         self.awq_model = awq_model
         self.model = model
@@ -75,7 +74,6 @@ class AwqQuantizer:
         self.act_bit = act_bit
         if act_bit is not None and act_bit not in [4, 8]:
             raise Exception( "act_bit only support 4 or 8")
-        self.only_smooth = only_smooth
         self.not_converted_layers = []
 
     def pseudo_quantize_tensor(self, w: torch.Tensor, group_size, zero_point=None, w_bit=None):
@@ -215,21 +213,20 @@ class AwqQuantizer:
             scales_list = append_str_prefix(
                 scales_list, get_op_name(self.model, self.modules[i]) + "."
             )
-            
-            if not self.only_smooth:
-                # [STEP 3]: Compute and apply clipping list
-                if self.apply_clip:
-                    clip_list = self._search_best_clip(
-                        self.modules[i], named_linears, input_feat
-                    )
-                    apply_clip(self.modules[i], clip_list)
-                    clip_list = append_str_prefix(
-                        clip_list, get_op_name(self.model, self.modules[i]) + "."
-                    )
 
-                # [STEP 4]: Quantize weights
-                if not self.export_compatible:
-                    self._apply_quant(self.modules[i], named_linears)
+            # [STEP 3]: Compute and apply clipping list
+            if self.apply_clip:
+                clip_list = self._search_best_clip(
+                    self.modules[i], named_linears, input_feat
+                )
+                apply_clip(self.modules[i], clip_list)
+                clip_list = append_str_prefix(
+                    clip_list, get_op_name(self.model, self.modules[i]) + "."
+                )
+
+            # [STEP 4]: Quantize weights
+            if not self.export_compatible:
+                self._apply_quant(self.modules[i], named_linears, input_feat_dict=input_feat)
 
             clear_memory()
 
@@ -242,7 +239,8 @@ class AwqQuantizer:
             self._apply_quant(self.modules[i], named_linears)
             clear_memory()
 
-    def _apply_quant(self, module, named_linears: Dict[str, nn.Linear]):
+    @torch.no_grad()
+    def _apply_quant(self, module, named_linears: Dict[str, nn.Linear], input_feat_dict: Optional[Dict[str, torch.Tensor]] = None):
         for name, linear_layer in named_linears.items():
             # NOTE: small regression in perplexity if linear layer uses .cpu().float()
             linear_layer = linear_layer.to(get_best_device()).half()

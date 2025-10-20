@@ -292,7 +292,7 @@ class BaseAWQForCausalLM(nn.Module):
                 return x
 
         # Save model and config files with empty state dict
-        if not self.quantizer.only_smooth:
+        if self.quantizer.export_compatible:
             self.model.config.quantization_config = self.quant_config.to_transformers_dict()
         self.model.generation_config.do_sample = True
         self.model.save_pretrained(save_dir, state_dict=EmptyModule().state_dict())

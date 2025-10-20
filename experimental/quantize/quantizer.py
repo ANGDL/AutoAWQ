@@ -7,15 +7,52 @@ from awq.quantize.quantizer import AwqQuantizer as BaseQuantizer
 logger = logging.getLogger(__name__)
 
 
-class MoeFixedQuantizer(BaseQuantizer):
-    MODEL_EXPERT_KEY = {
-        "qwen3_moe": "experts",
-        "deepseek_v2": "experts",
-        "deepseek_v3": "experts",
-    }
-    def __init__(self, awq_model, model, tokenizer, w_bit, group_size, zero_point, version, calib_data, split, text_column, duo_scaling, modules_to_not_convert=None, export_compatible=False, apply_clip=True, n_parallel_calib_samples=None, max_calib_samples=128, max_calib_seq_len=512, max_chunk_memory=1024 * 1024 * 1024, act_bit=None, only_smooth=False):
-        super().__init__(awq_model, model, tokenizer, w_bit, group_size, zero_point, version, calib_data, split, text_column, duo_scaling, modules_to_not_convert, export_compatible, apply_clip, n_parallel_calib_samples, max_calib_samples, max_calib_seq_len, max_chunk_memory, act_bit, only_smooth)
-    
+class ExpandedQuantizer(BaseQuantizer):
+    def __init__(
+            self, 
+            awq_model, 
+            model, 
+            tokenizer, 
+            w_bit, 
+            group_size, 
+            zero_point, 
+            version, 
+            calib_data, 
+            split, 
+            text_column, 
+            duo_scaling, 
+            modules_to_not_convert=None, 
+            export_compatible=False, 
+            apply_clip=True, 
+            n_parallel_calib_samples=None, 
+            max_calib_samples=128, 
+            max_calib_seq_len=512, 
+            max_chunk_memory=1024 * 1024 * 1024, 
+            act_bit=None, 
+            **kwargs
+            ) -> None:
+        super().__init__(
+            awq_model, 
+            model, 
+            tokenizer, 
+            w_bit, 
+            group_size, 
+            zero_point, 
+            version, 
+            calib_data, 
+            split, 
+            text_column, 
+            duo_scaling, 
+            modules_to_not_convert, 
+            export_compatible, 
+            apply_clip, 
+            n_parallel_calib_samples, 
+            max_calib_samples, 
+            max_calib_seq_len, 
+            max_chunk_memory, 
+            act_bit, 
+            )
+
     def _get_input_feat(self, layer, named_linears):
         # firstly, get input features of all linear layers
         def cache_input_hook(m, x, y, name, feat_dict):
@@ -70,17 +107,14 @@ class MoeFixedQuantizer(BaseQuantizer):
         unactivated_experts = list(set(named_linears.keys()) - set(input_feat.keys()))
         unactivated_experts += list(k for k, v in input_feat.items() if len(v) == 0 or v[0].shape[0] == 0)
         if len(unactivated_experts) > 0:
-            expert_key = self.MODEL_EXPERT_KEY.get(self.awq_model.model_type, None)
-            assert expert_key is not None, f"expert_key {expert_key} does not match model_type {self.awq_model.model_type}'s expert key {expert_key}"
-
             logger.warning(f"Some experts are not activated: {unactivated_experts}, will use input features from other experts with the same layer name suffix.")
             activated_experts = set(named_linears.keys()) - set(unactivated_experts)
 
             for expert in unactivated_experts:
                 for name in activated_experts:
-                    if expert_key in name and name.split('.')[-1] == expert.split('.')[-1]:
+                    if name.split('.')[-1] == expert.split('.')[-1]:
                         input_feat[expert] = [torch.ones_like(input_feat[name][0])]
-                        logger.warning(f"Using all-one input feature for unactivated expert {expert}, as it shares the same layer name suffix as activated expert {name}.")
+                        logger.warning(f"Using all-one input feature for unactivated expert {expert}, as it shares the same shape as {name}.")
                         break
                     
         for h in handles:
