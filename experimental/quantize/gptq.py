@@ -335,7 +335,7 @@ class GPTQ:
             # if os.environ.get("AWQ_DEBUG"):
             #     self.layer.weight.data[:, :i2] = Q[:, :i2].to(self.layer.weight.dtype)
             #     self.layer.weight.data[:, i2:] = W[:, i2:].to(self.layer.weight.dtype)
-            #     logger.debug(f"[Block {i1},{i2}], GPTQ Loss: {torch.sum(Losses) :<.6f}, AWQ Loss: {self.loss_func(self.out, self.layer(self.inp)) :<.7f}")
+            #     logger.debug(f"[Block {i1},{i2}], GPTQ Loss: {torch.sum(Losses) :<.6f}, AWQ Loss: {self.loss_func(self.out, self.layer(self.inp)) :<.9f}")
 
         if torch.cuda.is_available():
             torch.cuda.synchronize()
@@ -345,7 +345,7 @@ class GPTQ:
             torch.mps.synchronize()
 
         logger.debug(f"duration: {time.time() - tick :<.4f} sec")
-        logger.debug(f"AVG GPTQ Loss: {torch.sum(Losses).item() / self.num_samples :<.7f}")
+        logger.debug(f"AVG GPTQ Loss: {torch.sum(Losses).item() / self.num_samples :<.9f}")
 
         group_size = group_size if group_size != -1 else self.columns
         if static_groups and actorder:
@@ -378,7 +378,6 @@ class GPTQ:
         self.H = None
         self.Losses = None
         self.Trace = None
-        torch.cuda.empty_cache()
 
 class GPTQQuantizer(SmoothQuantizer):
     def __init__(
@@ -453,7 +452,8 @@ class GPTQQuantizer(SmoothQuantizer):
         )
         linear_layer.weight.data = q_weight_awq.to(linear_layer.weight.dtype).to(linear_layer.weight.device)
         qout = linear_layer(inp)
-        q_loss = self._compute_loss(out, qout, device=linear_layer.weight.device)    
+        q_loss = self._compute_loss(out, qout, device=linear_layer.weight.device)
+        clear_memory(qout) 
 
         linear_layer.weight.data = weight_copy.to(linear_layer.weight.dtype).to(linear_layer.weight.device)
         gptq = GPTQ(
@@ -480,12 +480,12 @@ class GPTQQuantizer(SmoothQuantizer):
         gptq.free()
 
         if q_loss < gptq_loss:
-            logger.debug(f"Layer {name}: AWQ loss {q_loss:<.7f} is lower than GPTQ loss {gptq_loss:<.7f}. Using AWQ quantization.")
+            logger.debug(f"Layer {name}: AWQ loss {q_loss:<.9f} is lower than GPTQ loss {gptq_loss:<.9f}. Using AWQ quantization.")
             linear_layer.weight.data = q_weight_awq.to(linear_layer.weight.dtype).to(linear_layer.weight.device)
             scales = q_scales
             zeros = q_zeros
         else:
-            logger.debug(f"Layer {name}: GPTQ loss {gptq_loss:<.7f} is lower than AWQ loss {q_loss:<.7f}. Using GPTQ quantization.")
+            logger.debug(f"Layer {name}: GPTQ loss {gptq_loss:<.9f} is lower than AWQ loss {q_loss:<.9f}. Using GPTQ quantization.")
             scales = gptq_scales
             zeros = gptq_zeros
 

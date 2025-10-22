@@ -448,8 +448,8 @@ class AwqQuantizer:
             scales_view = scales.view(1, -1).to(device)
 
             # avoid scaling values that overflow
-            scales[torch.isinf(scales)] = 1
-            scales[torch.isnan(scales)] = 1
+            scales_view[torch.isinf(scales_view)] = 1
+            scales_view[torch.isnan(scales_view)] = 1
 
             # Q(W * s)
             for fc in linears2scale:
@@ -457,6 +457,9 @@ class AwqQuantizer:
                 fc.weight.data = (
                     self.pseudo_quantize_tensor(fc.weight.data, self.group_size)[0] / scales_view
                 )
+
+            clear_memory(scales_view)
+            clear_memory(scales)
 
             # W * X
             int_w_output = self._module_forward(x, module2inspect, kwargs)

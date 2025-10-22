@@ -206,7 +206,7 @@ class SmoothQuantizer(BaseQuantizer):
 
         if os.getenv("AWQ_DEBUG"):
             qout = linear_layer(inp)
-            logger.debug(f"Pred Loss: {self._compute_loss(out, qout, device=out.device) :<.7f}")
+            logger.debug(f"Pred Loss: {self._compute_loss(out, qout, device=out.device) :<.9f}")
 
         return scales, zeros
 
