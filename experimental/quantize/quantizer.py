@@ -1,10 +1,12 @@
 from collections import defaultdict
+from typing import Dict
 import functools
-import logging
-import torch
-from awq.quantize.quantizer import AwqQuantizer as BaseQuantizer
 
-logger = logging.getLogger(__name__)
+import torch
+
+from awq.quantize.quantizer import AwqQuantizer as BaseQuantizer
+from awq.utils.utils import clear_memory
+from experimental.utils.logger import awq_logger as logger
 
 
 class ExpandedQuantizer(BaseQuantizer):
@@ -132,3 +134,19 @@ class ExpandedQuantizer(BaseQuantizer):
         input_feat = {k: cat_and_assert(k, v) for k, v in input_feat.items()}
 
         return input_feat
+    
+    @torch.no_grad()
+    def _module_forward(
+        self, x: torch.Tensor, module: torch.nn.Module, module_kwargs: Dict
+    ) -> torch.Tensor:
+        try:
+            return super()._module_forward(x, module, module_kwargs)
+        except torch.OutOfMemoryError as e:
+            if self.n_parallel_calib_samples is None or self.n_parallel_calib_samples > 1:
+                self.n_parallel_calib_samples = 1
+            clear_memory(force=True)
+            return super()._module_forward(x, module, module_kwargs)
+        
+        except Exception as e:
+            logger.error(f"Unexpected error during module forward: {e}")
+            raise e

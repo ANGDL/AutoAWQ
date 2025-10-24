@@ -221,12 +221,19 @@ class GPTQ:
             inp = inp.permute([1, 0, 2])
             inp = inp.flatten(1)
 
-        H *= num_samples / (num_samples + num_added)
-        num_samples += num_added
+        # H *= num_samples / (num_samples + num_added)
+        # num_samples += num_added
 
-        inp = inp.to(dtype=GPTQ_PRECISION)
-        inp = math.sqrt(2 / num_samples) * inp
-        H += inp.matmul(inp.t())
+        # inp = inp.to(dtype=GPTQ_PRECISION)
+        # inp = math.sqrt(2 / num_samples) * inp
+        # H += inp.matmul(inp.t())
+        new_total = num_samples + num_added
+
+        if inp.dtype is not GPTQ_PRECISION:
+            inp = inp.to(dtype=GPTQ_PRECISION)
+
+        H.addmm_(inp, inp.t(), beta=num_samples / new_total, alpha=2.0 / new_total)
+        num_samples = new_total
 
         return H, num_samples
 

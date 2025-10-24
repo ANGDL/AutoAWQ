@@ -79,14 +79,28 @@ class SmoothQuantizer(BaseQuantizer):
         inp = inp.to(next(module2inspect.parameters()).device)
 
         # [STEP 1]: Compute per-channel max value of normalised weights
-        # All layer weights are concatted together
-        weight = torch.cat([_m.weight for _m in layers], dim=0)
-        # The weights are reshaped to be organised by quantization group
-        if self.group_size > 0:
-            weight = weight.view(-1, self.group_size)
+        try:
+            # All layer weights are concatted together
+            weight = torch.cat([_m.weight for _m in layers], dim=0)
+            # The weights are reshaped to be organised by quantization group
+            if self.group_size > 0:
+                weight = weight.view(-1, self.group_size)
 
-        w_scale = weight.abs_().amax(dim=0).clamp(min=1e-4)
-        clear_memory(weight)
+            w_scale = weight.abs_().amax(dim=0).clamp(min=1e-4)
+            clear_memory(weight)
+        except torch.OutOfMemoryError as e:
+            logger.warning(f"OOM when computing weight scales for SmoothQuant. Try to used loop coalescing: {e}")
+            clear_memory(force=True)
+
+            w_scale = None
+            for linear in layers:
+                layer_weight = linear.weight.reshape(-1, self.group_size) if self.group_size > 0 else linear.weight
+                layer_max = layer_weight.abs().amax(dim=0)
+                if w_scale is None:
+                    w_scale = layer_max.clone()
+                else:
+                    torch.maximum(w_scale, layer_max, out=w_scale)
+            w_scale = weight.abs_().amax(dim=0).clamp(min=1e-4)
 
         # [STEP 2]: Compute per-channel mean of the input activation with chunking
         # move inp to cpu to avoid memory leak
@@ -108,7 +122,7 @@ class SmoothQuantizer(BaseQuantizer):
             chunk_max = inp_flat[i:end].to(torch.float32).amax(dim=0)
             x_scale = torch.max(x_scale, chunk_max.to(inp.device))
 
-        x_scale = x_scale.to(weight.dtype).clamp(min=1e-4)
+        x_scale = x_scale.to(w_scale.dtype).clamp(min=1e-4)
 
         # [STEP 3]: Compute output of module
         with torch.no_grad():

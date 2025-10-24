@@ -75,11 +75,40 @@ def set_module_name(model, name, value):
     setattr(parent, child_name, value)
 
 
-def clear_memory(weight=None):
+def clear_memory(weight=None, force=False):
     if weight is not None:
         del weight
-    # gc.collect()
-    # torch.cuda.empty_cache()
+
+    if force:
+        gc.collect()
+        if torch.cuda.is_available():
+            # 清理所有 CUDA 设备的缓存
+            for i in range(torch.cuda.device_count()):
+                with torch.cuda.device(i):
+                    torch.cuda.empty_cache()
+                    if hasattr(torch.cuda, "ipc_collect"):
+                        torch.cuda.ipc_collect()
+        elif torch.xpu.is_available():
+            torch.xpu.empty_cache()
+        elif torch.mps.is_available():
+            torch.mps.empty_cache()
+        return
+
+    if torch.cuda.is_available():
+        need_clear = False
+        for i in range(torch.cuda.device_count()):
+            with torch.cuda.device(i):
+                free_bytes, total_bytes = torch.cuda.mem_get_info()
+                free_pct = (free_bytes / total_bytes * 100) if total_bytes > 0 else 0
+                if free_pct < 5:
+                    need_clear = True
+        if need_clear:
+            gc.collect()
+            for i in range(torch.cuda.device_count()):
+                with torch.cuda.device(i):
+                    torch.cuda.empty_cache()
+                    if hasattr(torch.cuda, "ipc_collect"):
+                        torch.cuda.ipc_collect()
 
 
 def compute_memory_used_pct(device):
