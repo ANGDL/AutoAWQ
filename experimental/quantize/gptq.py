@@ -28,11 +28,16 @@ __all__ = ["GPTQQuantizer"]
 GPTQ_PRECISION = torch.float32
 
 
-def _quantize(x, scale, zero, maxq):
+def _quantize(x, scale, zero, maxq, requires_groupwise_processing: bool):
     if maxq < 0:
         return (x > scale / 2).float() * scale + (x < zero / 2).float() * zero
-    q = torch.clamp(torch.round(x / scale) + zero, 0, maxq)
-    return scale * (q - zero)
+    if requires_groupwise_processing:
+        q = torch.clamp(torch.round(x / scale), -maxq, maxq)
+        return scale * q
+    else:
+        q = torch.clamp(torch.round(x / scale) + zero, 0, maxq)
+        return scale * (q - zero)
+
 
 
 class _Quantizer(nn.Module):
@@ -41,6 +46,9 @@ class _Quantizer(nn.Module):
         self.register_buffer("maxq", torch.tensor(0))
         self.register_buffer("scale", torch.zeros(shape))
         self.register_buffer("zero", torch.zeros(shape))
+
+    def requires_groupwise_processing(self) -> bool:
+        return False
 
     def configure(
         self,
@@ -53,7 +61,6 @@ class _Quantizer(nn.Module):
         maxshrink=0.8,
         trits=False,
     ):
-        self.maxq = torch.tensor(2**bits - 1)
         self.perchannel = perchannel
         self.sym = sym
         self.mse = mse
@@ -62,6 +69,10 @@ class _Quantizer(nn.Module):
         self.maxshrink = maxshrink
         if trits:
             self.maxq = torch.tensor(-1)
+        if self.requires_groupwise_processing():
+            self.maxq = torch.tensor(2 ** (bits - 1) - 1)
+        else:
+            self.maxq = torch.tensor(2 ** bits - 1)
 
     def find_params(self, x, weight=False):
         dev = x.device
@@ -99,11 +110,15 @@ class _Quantizer(nn.Module):
             self.scale = xmax
             self.zero = xmin
         else:
-            self.scale = (xmax - xmin) / self.maxq
-            if self.sym:
-                self.zero = torch.full_like(self.scale, (self.maxq + 1) / 2)
+            if self.requires_groupwise_processing():
+                self.scale = xmax / self.maxq
+                self.zero = torch.zeros_like(self.scale)
             else:
-                self.zero = torch.round(-xmin / self.scale)
+                self.scale = (xmax - xmin) / self.maxq
+                if self.sym:
+                    self.zero = torch.full_like(self.scale, (self.maxq + 1) / 2)
+                else:
+                    self.zero = torch.round(-xmin / self.scale)
 
         if self.mse:
             best = torch.full([x.shape[0]], float("inf"), device=dev)
@@ -111,9 +126,13 @@ class _Quantizer(nn.Module):
                 p = 1 - i / self.grid
                 xmin1 = p * xmin
                 xmax1 = p * xmax
-                scale1 = (xmax1 - xmin1) / self.maxq
+                scale1 = (
+                    xmax1 / self.maxq
+                    if self.requires_groupwise_processing()
+                    else (xmax1 - xmin1) / self.maxq
+                )
                 zero1 = torch.round(-xmin1 / scale1) if not self.sym else self.zero
-                q = _quantize(x, scale1.unsqueeze(1), zero1.unsqueeze(1), self.maxq)
+                q = _quantize(x, scale1.unsqueeze(1), zero1.unsqueeze(1), self.maxq, self.requires_groupwise_processing())
                 q -= x
                 q.abs_()
                 q.pow_(self.norm)
@@ -147,15 +166,17 @@ class _Quantizer(nn.Module):
             self.zero = self.zero.unsqueeze(0)
 
     def quantize(self, x):
-        if self.ready():
-            return _quantize(x, self.scale, self.zero, self.maxq)
-        return x
+        return _quantize(x, self.scale, self.zero, self.maxq, self.requires_groupwise_processing())
 
     def enabled(self):
         return self.maxq > 0
 
     def ready(self):
         return torch.all(self.scale != 0)
+
+class QQQQuantizer(_Quantizer):
+    def requires_groupwise_processing(self,) -> bool:
+        return self.perchannel and self.sym
     
 
 class GPTQ:
@@ -180,7 +201,7 @@ class GPTQ:
         assert self.num_samples > 0, "No samples were used to compute the Hessian."
         self.columns = self.H.shape[0]
         self.dev = module.weight.device
-        self.quantizer = _Quantizer()
+        self.quantizer = QQQQuantizer()
         self.loss_func = loss_func if loss_func is not None else nn.MSELoss(reduction="mean")
 
     @staticmethod
@@ -252,8 +273,6 @@ class GPTQ:
         if isinstance(self.layer, transformers.Conv1D):
             W = W.t()
         W = W.float()
-
-        tick = time.time()
 
         if not self.quantizer.ready():
             self.quantizer.find_params(W, weight=True)
@@ -343,15 +362,7 @@ class GPTQ:
             #     self.layer.weight.data[:, :i2] = Q[:, :i2].to(self.layer.weight.dtype)
             #     self.layer.weight.data[:, i2:] = W[:, i2:].to(self.layer.weight.dtype)
             #     logger.debug(f"[Block {i1},{i2}], GPTQ Loss: {torch.sum(Losses) :<.6f}, AWQ Loss: {self.loss_func(self.out, self.layer(self.inp)) :<.9f}")
-
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-        elif torch.xpu.is_available():
-            torch.xpu.synchronize()
-        elif torch.mps.is_available():
-            torch.mps.synchronize()
-
-        logger.debug(f"duration: {time.time() - tick :<.4f} sec")
+        
         logger.debug(f"AVG GPTQ Loss: {torch.sum(Losses).item() / self.num_samples :<.9f}")
 
         group_size = group_size if group_size != -1 else self.columns
@@ -472,7 +483,7 @@ class GPTQQuantizer(SmoothQuantizer):
         )
         gptq.quantizer.configure(
             self.w_bit,
-            perchannel=(self.group_size != -1),
+            perchannel=(self.group_size == -1),
             sym=not self.zero_point,
             mse=True,
             trits=(self.w_bit not in [4, 8]),

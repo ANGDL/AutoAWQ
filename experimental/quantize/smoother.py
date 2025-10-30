@@ -83,9 +83,6 @@ class SmoothQuantizer(BaseQuantizer):
             # All layer weights are concatted together
             weight = torch.cat([_m.weight for _m in layers], dim=0)
             # The weights are reshaped to be organised by quantization group
-            if self.group_size > 0:
-                weight = weight.view(-1, self.group_size)
-
             w_scale = weight.abs_().amax(dim=0).clamp(min=1e-4)
             clear_memory(weight)
         except torch.OutOfMemoryError as e:
@@ -94,8 +91,7 @@ class SmoothQuantizer(BaseQuantizer):
 
             w_scale = None
             for linear in layers:
-                layer_weight = linear.weight.reshape(-1, self.group_size) if self.group_size > 0 else linear.weight
-                layer_max = layer_weight.abs().amax(dim=0)
+                layer_max = linear.weight.abs().amax(dim=0)
                 if w_scale is None:
                     w_scale = layer_max.clone()
                 else:
