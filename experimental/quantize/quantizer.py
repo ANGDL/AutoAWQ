@@ -1,12 +1,26 @@
 from collections import defaultdict
-from typing import Dict
+from pathlib import Path
+from typing import Dict, List, Tuple
 import functools
 
 import torch
+import torch.nn as nn
+from tqdm import tqdm
+import transformers
+
+from experimental.utils.logger import awq_logger as logger
+from experimental.utils.quantization_progress import QuantizationProgressManager
 
 from awq.quantize.quantizer import AwqQuantizer as BaseQuantizer
-from awq.utils.utils import clear_memory
-from experimental.utils.logger import awq_logger as logger
+from awq.utils.utils import clear_memory, get_best_device
+from awq.quantize.scale import apply_scale, apply_clip
+from awq.utils.module import (
+    append_str_prefix,
+    get_op_name,
+    get_named_linears,
+    set_op_by_name,
+    exclude_layers_to_not_quantize,
+)
 
 
 class ExpandedQuantizer(BaseQuantizer):
@@ -31,6 +45,8 @@ class ExpandedQuantizer(BaseQuantizer):
             max_calib_seq_len=512, 
             max_chunk_memory=1024 * 1024 * 1024, 
             act_bit=None, 
+            progress_dir=None,
+            enable_progress=True,
             **kwargs
             ) -> None:
         super().__init__(
@@ -54,6 +70,178 @@ class ExpandedQuantizer(BaseQuantizer):
             max_chunk_memory, 
             act_bit, 
             )
+        progress_path = (
+            Path(progress_dir).expanduser()
+            if progress_dir
+            else Path.cwd() / "awq_quant_progress"
+        )
+
+        self.progress_dir = progress_path if enable_progress else None
+        self.layer_names = [get_op_name(self.model, module) for module in self.modules]
+        if enable_progress:
+            self.progress_manager = QuantizationProgressManager(self.progress_dir, logger=logger)
+            self.progress_config = self.progress_manager.ensure_config(
+                {
+                    "w_bit": self.w_bit,
+                    "group_size": self.group_size,
+                    "zero_point": self.zero_point,
+                    "version": self.version,
+                    "apply_clip": self.apply_clip,
+                    "act_bit": self.act_bit,
+                    "module_count": len(self.modules),
+                    "layer_order": self.layer_names,
+                }
+            )
+            self._completed_layers = set(self.progress_config.get("completed_layers", []))
+        else:
+            self.progress_manager = None
+            self.progress_config = {}
+            self._completed_layers = set()
+
+    def quantize(self):
+        try:
+            for i, module in enumerate(tqdm(self.modules, desc="AWQ")):
+                layer_name = self.layer_names[i]
+                cached_state = None
+                if self.progress_manager is not None:
+                    cached_state = self.progress_manager.load_layer_state(layer_name, i)
+                    if cached_state is not None and not isinstance(cached_state, dict):
+                        logger.warning(
+                            "Ignoring malformed cached state for layer %s", layer_name
+                        )
+                        cached_state = None
+                    setattr(self, "cached_state", cached_state)
+
+                # Move module and inputs to correct device
+                common_device = next(module.parameters()).device
+                if common_device is None or str(common_device) == "cpu":
+                    if torch.cuda.is_available():
+                        best_device = "cuda:" + str(i % torch.cuda.device_count())
+                    else:
+                        best_device = get_best_device()
+
+                    self.modules[i] = module.to(best_device)
+                    module = self.modules[i]
+                    common_device = next(module.parameters()).device
+
+                if self.module_kwargs.get("position_ids") is not None:
+                    self.module_kwargs["position_ids"] = self.module_kwargs[
+                        "position_ids"
+                    ].to(common_device)
+
+                if self.module_kwargs.get("attention_mask") is not None:
+                    self.module_kwargs["attention_mask"] = self.module_kwargs[
+                        "attention_mask"
+                    ].to(common_device)
+
+                self.inps = self.inps.to(common_device)
+
+                # We need to move the rotary embedding every time we move to a new module.
+                # Transformers 4.45.0 moved rotary embedding to model definition as of this PR:
+                # https://github.com/huggingface/transformers/pull/32617
+                self.awq_model.move_embed(self.model, common_device)
+
+                # Transformers >= 4.48.0 requires positional embeddings should be computed before forward pass
+                if (
+                    transformers.__version__ >= "4.48.0"
+                    and self.module_kwargs.get("position_embeddings") is None and hasattr(self.model.model, "rotary_emb")
+                ):
+                    self.module_kwargs["position_embeddings"] = self.model.model.rotary_emb(
+                        self.inps, self.module_kwargs["position_ids"]
+                    )
+
+                if (
+                    transformers.__version__ >= "4.48.0"
+                    and self.module_kwargs.get("attention_mask") is None
+                ):
+                    self.module_kwargs["attention_mask"] = None
+
+                for k, v in self.module_kwargs.items():
+                    # position embeddings found in tuple
+                    if isinstance(v, tuple):
+                        self.module_kwargs[k] = tuple(
+                            item.to(common_device)
+                            if isinstance(item, (torch.Tensor, nn.Module))
+                            else item
+                            for item in v
+                        )
+
+                # [STEP 1]: Get layer, extract linear modules, extract input features
+                named_linears = get_named_linears(module)
+
+                # Filter out the linear layers we don't want to exclude
+                not_converted_layers = []
+                named_linears = exclude_layers_to_not_quantize(
+                    named_linears, self.modules_to_not_convert, not_converted_layers
+                )
+                self.not_converted_layers.extend(
+                    append_str_prefix(not_converted_layers, layer_name + ".")
+                )
+
+                input_feat = self._get_input_feat(module, named_linears)
+                clear_memory()
+
+                # [STEP 2]: Compute/apply scale list or reuse cached artifacts
+                restored = False
+                scales_list_local: List[Tuple[str, Tuple[str, ...], torch.Tensor]] = []
+                clip_list_local: List[Tuple[str, torch.Tensor]] = []
+
+                if cached_state and cached_state.get("scales_list"):
+                    restored = True
+                    scales_list_local = list(cached_state.get("scales_list", []))
+                    clip_list_local = list(cached_state.get("clip_list", []))
+                    apply_scale(module, scales_list_local, input_feat_dict=input_feat)
+                    if self.apply_clip and clip_list_local:
+                        apply_clip(module, clip_list_local)
+                    logger.debug(
+                        f"Restored quantization artifacts for layer {layer_name}"
+                    )
+                else:
+                    module_config: List[Dict] = self.awq_model.get_layers_for_scaling(
+                        module, input_feat, self.module_kwargs
+                    )
+                    scales_list_local = [
+                        self._search_best_scale(module, **layer)
+                        for layer in module_config
+                    ]
+                    apply_scale(module, scales_list_local, input_feat_dict=input_feat)
+
+                    if self.apply_clip:
+                        clip_list_local = self._search_best_clip(
+                            module, named_linears, input_feat
+                        )
+                        apply_clip(module, clip_list_local)
+
+                if not self.apply_clip:
+                    clip_list_local = []
+
+                # [STEP 4]: Quantize weights
+                if not self.export_compatible:
+                    self._apply_quant(module, named_linears, input_feat_dict=input_feat)
+
+                metadata = dict(cached_state.get("metadata", {})) if cached_state else {}
+                metadata.update(
+                    {
+                        "source": "restored" if restored else "computed",
+                        "apply_clip": self.apply_clip,
+                        "export_compatible": self.export_compatible,
+                    }
+                )
+
+                if self.progress_manager is not None:
+                    self.progress_manager.save_layer_async(
+                        layer_name=layer_name,
+                        layer_index=i,
+                        scales_list=scales_list_local,
+                        clip_list=clip_list_local,
+                        extra_metadata=metadata,
+                    )
+                    self.progress_manager.mark_layer_done(layer_name)
+                    self._completed_layers.add(layer_name)
+                clear_memory()
+        finally:
+            if self.progress_manager is not None:
+                self.progress_manager.close()
 
     def _get_input_feat(self, layer, named_linears):
         # firstly, get input features of all linear layers

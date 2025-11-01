@@ -396,6 +396,7 @@ class GPTQ:
         self.H = None
         self.Losses = None
         self.Trace = None
+        clear_memory()
 
 class GPTQQuantizer(SmoothQuantizer):
     def __init__(
@@ -441,6 +442,7 @@ class GPTQQuantizer(SmoothQuantizer):
             max_calib_seq_len,
             max_chunk_memory,
             act_bit,
+            **kwargs,
         )
         self.batch_size = kwargs.get("batch_size", 1)
         self.block_size = kwargs.get("block_size", 128)

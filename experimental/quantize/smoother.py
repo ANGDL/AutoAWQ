@@ -35,6 +35,7 @@ class SmoothQuantizer(BaseQuantizer):
         max_calib_seq_len=512,
         max_chunk_memory=1024 * 1024 * 1024,
         act_bit=None,
+        **kwargs,
     ):
         super().__init__(
             awq_model,
@@ -56,6 +57,7 @@ class SmoothQuantizer(BaseQuantizer):
             max_calib_seq_len,
             max_chunk_memory,
             act_bit,
+            **kwargs,
         )
 
     @torch.no_grad()
