@@ -6,18 +6,18 @@ from typing import Dict, List
 class ConfigUpdater:
     """
     A class to update the quantization configuration in a model's config.json file.
-    Supports 'w8a8_compressed' and 'w4a8' quantization types.
-    'w8a8_compressed' use for vllm.
+    Supports 'wNa8_compressed' and 'w4a8' quantization types.
+    'wNa8_compressed' use for vllm.
     'w4a8' use for sglang.
     """
-    def __init__(self, awq_config: Dict, config_type: str = "w8a8_compressed"):
+    def __init__(self, awq_config: Dict, config_type: str = "wNa8_compressed"):
         self.awq_config = awq_config
         self.config_type = config_type
         
-    def _create_w8a8_compressed_config(self, not_converted_layers: List[str]):
+    def _create_wNa8_compressed_config(self, not_converted_layers: List[str]):
         ignore = list(set(not_converted_layers))
         w_bits = self.awq_config.get("w_bit", 8)
-        assert w_bits in [8], "Only 8-bit weight quantization is supported for w8a8_compressed."
+        assert w_bits in [4, 8], "Only 4-bit and 8-bit weight quantization is supported for wNa8_compressed."
         w_strategy = "group" if self.awq_config.get("q_group_size", 128) != -1 else "channel"
         assert w_strategy in ["group", "channel"], "q_group_size should be -1 or a positive integer."
 
@@ -76,8 +76,8 @@ class ConfigUpdater:
 
         w_bits = self.awq_config.get("w_bit", None)
 
-        if self.config_type == "w8a8_compressed" and w_bits == 8:
-            config["quantization_config"] = self._create_w8a8_compressed_config(not_converted_layers)
+        if self.config_type == "wNa8_compressed":
+            config["quantization_config"] = self._create_wNa8_compressed_config(not_converted_layers)
         elif self.config_type == "w4a8" and w_bits == 4:
             config["quantization_config"] = self._create_w4a8_config(not_converted_layers)
         else:

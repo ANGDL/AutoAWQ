@@ -9,7 +9,7 @@ from awq.utils.module import (
     set_op_by_name,
 )
 from experimental.quantize.quantizer import ExpandedQuantizer as BaseQuantizer
-from experimental.modules.linear.gemm import WQ8Linear_GEMM
+from experimental.modules.linear.gemm import WQ8Linear_GEMM, WQ4Linear_GEMM
 from awq.utils.module import append_str_prefix
 from experimental.utils.logger import awq_logger as logger
 
@@ -243,7 +243,12 @@ class SmoothQuantizer(BaseQuantizer):
                 scales = scales.contiguous()
                 if zeros is not None:
                     zeros = zeros.contiguous()
-                q_linear_module = WQ8Linear_GEMM
+                if self.w_bit == 8:
+                    q_linear_module = WQ8Linear_GEMM
+                elif self.w_bit == 4:
+                    q_linear_module = WQ4Linear_GEMM
+                else:
+                    raise ValueError(f"Unsupported w_bit {self.w_bit} for GEMM version")
             else:
                 raise ValueError(f"Unknown version {self.version}")
 
