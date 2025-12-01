@@ -2,6 +2,7 @@ import gc
 import importlib
 import torch
 import accelerate
+import os
 
 
 ipex_available = importlib.util.find_spec("intel_extension_for_pytorch") is not None
@@ -78,6 +79,7 @@ def set_module_name(model, name, value):
 def clear_memory(weight=None, force=False):
     if weight is not None:
         del weight
+        force = os.getenv("AWQ_CLEAR_MEMORY_IMMEDIATE", "false").lower() in ["true", "1", "t"]
 
     if force:
         gc.collect()

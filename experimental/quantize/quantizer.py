@@ -323,18 +323,3 @@ class ExpandedQuantizer(BaseQuantizer):
 
         return input_feat
     
-    @torch.no_grad()
-    def _module_forward(
-        self, x: torch.Tensor, module: torch.nn.Module, module_kwargs: Dict
-    ) -> torch.Tensor:
-        try:
-            return super()._module_forward(x, module, module_kwargs)
-        except torch.OutOfMemoryError as e:
-            if self.n_parallel_calib_samples is None or self.n_parallel_calib_samples > 1:
-                self.n_parallel_calib_samples = 1
-            clear_memory(force=True)
-            return super()._module_forward(x, module, module_kwargs)
-        
-        except Exception as e:
-            logger.error(f"Unexpected error during module forward: {e}")
-            raise e
