@@ -621,6 +621,8 @@ class AwqQuantizer:
             def __init__(self, module):
                 super().__init__()
                 self.module = module
+                if hasattr(module, 'attention_type'):
+                    self.attention_type = module.attention_type  # for transformers compatibility
 
             def forward(self, *args, **kwargs):
                 # assume first input to forward is hidden states
@@ -645,7 +647,10 @@ class AwqQuantizer:
 
         # Update the layer kwargs with `prepare_inputs_for_generation` method
         # that takes care of everything to avoid unexpected errors.
-        layer_kwargs = self.model.prepare_inputs_for_generation(samples, **layer_kwargs)
+        if hasattr(self.awq_model, "prepare_inputs_for_generation"):
+            layer_kwargs = self.awq_model.prepare_inputs_for_generation(samples, **layer_kwargs)
+        else:
+            layer_kwargs = self.model.prepare_inputs_for_generation(samples, **layer_kwargs)
         # Pop the input_ids as they are not needed at all.
         layer_kwargs.pop("input_ids")
 
@@ -663,6 +668,11 @@ class AwqQuantizer:
             )
         elif "qwen" in self.awq_model.model_type:
             layer_kwargs["attention_mask"] = None
+        
+        if "position_ids" in layer_kwargs:
+            layer_kwargs["position_ids"] = layer_kwargs["position_ids"].to(
+                best_device
+            )
 
         return modules, layer_kwargs, inps
 
@@ -677,7 +687,7 @@ class AwqQuantizer:
         handles = []
 
         # FIXME: Workaround for Mixtral to use block_sparse_moe input features
-        if self.awq_model.model_type == "mixtral":
+        if self.awq_model.model_type in ["mixtral", "minimax_m2", "minimax"] :
             named_linears = {
                 **named_linears,
                 "block_sparse_moe": layer.block_sparse_moe,

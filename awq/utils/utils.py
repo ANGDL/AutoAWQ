@@ -102,7 +102,7 @@ def clear_memory(weight=None, force=False):
             with torch.cuda.device(i):
                 free_bytes, total_bytes = torch.cuda.mem_get_info()
                 free_pct = (free_bytes / total_bytes * 100) if total_bytes > 0 else 0
-                if free_pct < 5:
+                if free_pct < int(os.getenv("AWQ_CLEAR_MEMORY_FREE_PCT", "20")):
                     need_clear = True
         if need_clear:
             gc.collect()

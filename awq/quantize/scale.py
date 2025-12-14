@@ -9,7 +9,11 @@ from transformers.models.llama.modeling_llama import LlamaRMSNorm
 from transformers.models.gemma.modeling_gemma import GemmaRMSNorm
 from transformers.models.gemma2.modeling_gemma2 import Gemma2RMSNorm
 from transformers.models.cohere.modeling_cohere import CohereLayerNorm
-from transformers.activations import NewGELUActivation, PytorchGELUTanh, GELUActivation
+from transformers.activations import NewGELUActivation, GELUActivation
+try:
+    from transformers.activations import PytorchGELUTanh
+except ImportError:
+    from transformers.activations import GELUTanh as PytorchGELUTanh
 
 allowed_norms = [nn.LayerNorm, LlamaRMSNorm, GemmaRMSNorm, Gemma2RMSNorm, CohereLayerNorm]
 allowed_act_fns = [

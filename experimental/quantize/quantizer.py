@@ -254,7 +254,7 @@ class ExpandedQuantizer(BaseQuantizer):
         handles = []
 
         # FIXME: Workaround for Mixtral to use block_sparse_moe input features
-        if self.awq_model.model_type == "mixtral":
+        if self.awq_model.model_type in ["mixtral", "minimax_m2", "minimax"] :
             named_linears = {
                 **named_linears,
                 "block_sparse_moe": layer.block_sparse_moe,
@@ -292,20 +292,9 @@ class ExpandedQuantizer(BaseQuantizer):
 
         self.inps = self._module_forward(self.inps, layer, module_kwargs)
 
-        # check all expert layers are visited
-        # some experts are not activated, enable use input feature from other experts
-        unactivated_experts = list(set(named_linears.keys()) - set(input_feat.keys()))
-        unactivated_experts += list(k for k, v in input_feat.items() if len(v) == 0 or v[0].shape[0] == 0)
-        if len(unactivated_experts) > 0:
-            logger.warning(f"Some experts are not activated: {unactivated_experts}, will use input features from other experts with the same layer name suffix.")
-            activated_experts = set(named_linears.keys()) - set(unactivated_experts)
-
-            for expert in unactivated_experts:
-                for name in activated_experts:
-                    if name.split('.')[-1] == expert.split('.')[-1]:
-                        input_feat[expert] = [torch.ones_like(input_feat[name][0])]
-                        logger.warning(f"Using all-one input feature for unactivated expert {expert}, as it shares the same shape as {name}.")
-                        break
+        missing_linears = self._find_missing_activation_modules(named_linears, input_feat)
+        if missing_linears:
+            self._synthesize_missing_activations(named_linears, input_feat, missing_linears)
                     
         for h in handles:
             h.remove()
@@ -323,3 +312,144 @@ class ExpandedQuantizer(BaseQuantizer):
 
         return input_feat
     
+    def _find_missing_activation_modules(self, named_linears, input_feat):
+        missing = []
+        for name in named_linears.keys():
+            tensors = input_feat.get(name, [])
+            total_rows = sum(
+                tensor.shape[0] for tensor in tensors if isinstance(tensor, torch.Tensor)
+            )
+            if total_rows == 0:
+                missing.append(name)
+        return missing
+
+    def _synthesize_missing_activations(self, named_linears, input_feat, missing_linears):
+        # 中文逻辑描述：
+        # 1. 按专家名称后缀分组，聚合已激活专家的输入特征；
+        # 2. 优先使用同后缀的真实激活统计，为缺失专家构造替代样本；
+        # 3. 若后缀组也为空，则退化到全局池；仍无数据时才回退到全1张量。
+        suffix_to_names = defaultdict(list)
+        for name in named_linears.keys():
+            suffix = name.split(".")[-1]
+            suffix_to_names[suffix].append(name)
+
+        suffix_buffers = defaultdict(dict)
+        global_chunks = defaultdict(list)
+        for suffix, names in suffix_to_names.items():
+            shape_buckets = defaultdict(list)
+            for name in names:
+                for tensor in input_feat.get(name, []):
+                    if isinstance(tensor, torch.Tensor) and tensor.shape[0] > 0:
+                        shape_key = self._shape_key(tensor)
+                        if shape_key is not None:
+                            shape_buckets[shape_key].append(tensor.contiguous())
+
+            for shape_key, tensors in shape_buckets.items():
+                concatenated = torch.cat(tensors, dim=0)
+                if self.max_calib_samples is not None and concatenated.shape[0] > self.max_calib_samples:
+                    concatenated = concatenated[: self.max_calib_samples]
+                suffix_buffers[suffix][shape_key] = concatenated
+                global_chunks[shape_key].append(concatenated)
+
+        global_buffers = {}
+        for shape_key, tensors in global_chunks.items():
+            stacked = torch.cat(tensors, dim=0)
+            if self.max_calib_samples is not None and stacked.shape[0] > self.max_calib_samples:
+                stacked = stacked[: self.max_calib_samples]
+            global_buffers[shape_key] = stacked
+
+        unresolved = []
+        for expert_name in missing_linears:
+            suffix = expert_name.split(".")[-1]
+            target_dim = self._infer_linear_in_features(named_linears.get(expert_name))
+            candidate = None
+            selected_shape = None
+
+            suffix_shapes = suffix_buffers.get(suffix, {})
+            shape_key = self._choose_shape_key(suffix_shapes, target_dim)
+            if shape_key is not None:
+                candidate = suffix_shapes.get(shape_key)
+                selected_shape = shape_key
+
+            if candidate is None:
+                shape_key = self._choose_shape_key(global_buffers, target_dim)
+                if shape_key is not None:
+                    candidate = global_buffers.get(shape_key)
+                    selected_shape = shape_key
+
+            if candidate is None:
+                unresolved.append(expert_name)
+                continue
+
+            synthetic_feat = self._sample_activation_rows(candidate, self.max_calib_samples)
+            input_feat[expert_name] = [synthetic_feat]
+            logger.warning(
+                f"Synthesizing activation stats for {expert_name} using {synthetic_feat.shape[0]} tokens from suffix '{suffix}' with shape {selected_shape}.",
+            )
+
+        if unresolved:
+            reference_tensor = self._first_available_activation(input_feat)
+            if reference_tensor is None:
+                raise RuntimeError(
+                    "Unable to approximate activation statistics for %s. Consider increasing max_calib_samples or providing more diverse calibration data."
+                    % unresolved
+                )
+
+            for expert_name in unresolved:
+                target_dim = self._infer_linear_in_features(named_linears.get(expert_name))
+                row_budget = reference_tensor.shape[0]
+                if self.max_calib_samples is not None:
+                    row_budget = min(row_budget, self.max_calib_samples)
+                reference_slice_shape = reference_tensor[:row_budget].shape
+                if not reference_slice_shape:
+                    reference_slice_shape = (row_budget,)
+                if target_dim is not None and len(reference_slice_shape) >= 1:
+                    reference_slice_shape = reference_slice_shape[:-1] + (target_dim,)
+                fallback_tensor = reference_tensor.new_ones(reference_slice_shape)
+                input_feat[expert_name] = [fallback_tensor]
+                logger.error(
+                    "Falling back to all-one activations for %s due to missing statistics.",
+                    expert_name,
+                )
+
+    @staticmethod
+    def _sample_activation_rows(source_tensor, budget):
+        if budget is None or source_tensor.shape[0] <= budget:
+            return source_tensor.clone()
+        sample_indices = torch.randperm(source_tensor.shape[0])[:budget]
+        return source_tensor.index_select(0, sample_indices).contiguous()
+
+    def _first_available_activation(self, input_feat):
+        for tensors in input_feat.values():
+            for tensor in tensors:
+                if isinstance(tensor, torch.Tensor) and tensor.shape[0] > 0:
+                    return tensor
+        return None
+
+    @staticmethod
+    def _infer_linear_in_features(linear_module):
+        if linear_module is None:
+            return None
+        if hasattr(linear_module, "in_features"):
+            return linear_module.in_features
+        if hasattr(linear_module, "weight"):
+            return linear_module.weight.shape[1]
+        return None
+
+    @staticmethod
+    def _shape_key(tensor):
+        if tensor is None:
+            return None
+        return (tensor.dim(), tuple(tensor.shape[1:]))
+
+    @staticmethod
+    def _choose_shape_key(shape_dict, target_dim):
+        if not shape_dict:
+            return None
+        keys = list(shape_dict.keys())
+        if target_dim is not None:
+            for key in keys:
+                trailing = key[1]
+                if trailing and trailing[-1] == target_dim:
+                    return key
+        return keys[0]

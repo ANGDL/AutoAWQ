@@ -43,7 +43,9 @@ AWQ_CAUSAL_LM_MODEL_MAP = {
     "minicpm3": MiniCPM3AWQForCausalLM,
     "qwen2_vl": Qwen2VLAWQForCausalLM,
     "qwen2_5_vl": Qwen2_5_VLAWQForCausalLM,
-    "qwen2_5_omni": Qwen2_5_OmniAWQForConditionalGeneration
+    "qwen2_5_omni": Qwen2_5_OmniAWQForConditionalGeneration,
+    "minimax": MiniMaxM2AWQForCausalLM,
+    "minimax_m2": MiniMaxM2AWQForCausalLM,
 }
 
 
