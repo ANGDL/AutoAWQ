@@ -404,6 +404,9 @@ class AwqQuantizer:
             best_scales,
         )
 
+    def _norm_scales(self, scales: torch.Tensor, *args, **kwargs) -> torch.Tensor:
+        return scales / (scales.max() * scales.min()).sqrt()
+
     def _compute_best_scale(
         self,
         x: torch.Tensor,
@@ -444,7 +447,7 @@ class AwqQuantizer:
                 scales = (x_mean.pow(ratio) / (w_mean.pow(1 - ratio) + 1e-4)).clamp(min=1e-4)
             else:
                 scales = x_mean.pow(ratio).clamp(min=1e-4).view(-1)
-            scales = scales / (scales.max() * scales.min()).sqrt()
+            scales = self._norm_scales(scales)
             scales_view = scales.view(1, -1).to(device)
 
             # avoid scaling values that overflow

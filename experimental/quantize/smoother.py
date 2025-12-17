@@ -60,6 +60,18 @@ class SmoothQuantizer(BaseQuantizer):
             **kwargs,
         )
 
+    def _norm_scales(self, scales: torch.Tensor, alpha=6.0, beta=0.15) -> torch.Tensor:
+        if os.getenv("FORCE_AWQ_NORM_SCALE", "0") in ['1', 'true', 'True']:
+            return super()._norm_scales(scales)
+
+        below_one = scales < 1.0
+        delta_low = 1.0 - scales
+        push_near_one = 1.0 - delta_low / (1.0 + alpha * delta_low)
+
+        delta_high = scales - 1.0
+        tamed_high = 1.0 + delta_high / (1.0 + beta * delta_high)
+        return torch.where(below_one, push_near_one, tamed_high)
+
     @torch.no_grad()
     def _search_best_scale(
         self,

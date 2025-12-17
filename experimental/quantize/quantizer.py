@@ -238,6 +238,8 @@ class ExpandedQuantizer(BaseQuantizer):
                     )
                     self.progress_manager.mark_layer_done(layer_name)
                     self._completed_layers.add(layer_name)
+
+                self.modules[i].cpu()
                 clear_memory()
         finally:
             if self.progress_manager is not None:

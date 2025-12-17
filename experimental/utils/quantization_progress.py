@@ -60,10 +60,7 @@ class QuantizationProgressManager:
                     updated[key] = value
                 elif key not in {"completed_layers"} and updated[key] != value:
                     self._log_warning(
-                        "Config mismatch for %s: existing=%s, requested=%s",
-                        key,
-                        updated[key],
-                        value,
+                        f"Config mismatch for {key}: existing={updated[key]}, requested={value}",
                     )
             if "completed_layers" not in updated:
                 updated["completed_layers"] = []
