@@ -93,6 +93,7 @@ TRANSFORMERS_AUTO_MAPPING_DICT = {
     "qwen2_5_omni": "AutoModelForTextToWaveform",
     "minimax": "AutoModelForCausalLM",
     "minimax_m2": "AutoModelForCausalLM",
+    "qwen3_vl_moe": "AutoModelForVision2Seq",
 }
 
 

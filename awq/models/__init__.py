@@ -34,3 +34,4 @@ from .qwen2vl import Qwen2VLAWQForCausalLM
 from .qwen2_5_vl import Qwen2_5_VLAWQForCausalLM
 from .qwen2_5_omni import Qwen2_5_OmniAWQForConditionalGeneration
 from .minimax_m2 import MiniMaxM2AWQForCausalLM
+from .qwen3vl_moe import Qwen3VLMoeAWQForConditionalGeneration

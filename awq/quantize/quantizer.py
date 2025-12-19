@@ -672,7 +672,7 @@ class AwqQuantizer:
         elif "qwen" in self.awq_model.model_type:
             layer_kwargs["attention_mask"] = None
         
-        if "position_ids" in layer_kwargs:
+        if "position_ids" in layer_kwargs and layer_kwargs["position_ids"] is not None:
             layer_kwargs["position_ids"] = layer_kwargs["position_ids"].to(
                 best_device
             )

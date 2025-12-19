@@ -3,7 +3,7 @@ import importlib
 import torch
 import accelerate
 import os
-
+import contextlib
 
 ipex_available = importlib.util.find_spec("intel_extension_for_pytorch") is not None
 try:
@@ -144,3 +144,23 @@ def get_lowest_memory_device_index():
             curr_device_memory_pct = device_memory_pct
 
     return device
+
+
+@contextlib.contextmanager
+def skip_weights_initialize(use_zeros: bool = False):
+    """
+    Very similar to `transformers.model_utils.no_init_weights`, except that torch.Tensor
+    initialization functions are also patched to account for tensors which are
+    initialized not on the meta device
+    """
+
+    def skip(tensor: torch.Tensor, *args, **kwargs) -> torch.Tensor:
+        if use_zeros:
+            return tensor.fill_(0)
+        return tensor
+
+    with contextlib.ExitStack() as stack:
+        for name in TORCH_INIT_FUNCTIONS.keys():
+            stack.enter_context(patch_attr(torch.nn.init, name, skip))
+            stack.enter_context(patch_attr(torch.Tensor, name, skip))
+        yield
