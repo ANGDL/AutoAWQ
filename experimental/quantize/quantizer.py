@@ -268,7 +268,7 @@ class ExpandedQuantizer(BaseQuantizer):
                 "mlp": layer.mlp,
             }
         
-        if self.awq_model.model_type == "qwen3_moe":
+        if self.awq_model.model_type in ["qwen3_moe", "qwen3_vl_moe"]:
             named_linears = {
                 **named_linears,
                 "mlp": layer.mlp,

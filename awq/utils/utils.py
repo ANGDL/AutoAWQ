@@ -4,6 +4,10 @@ import torch
 import accelerate
 import os
 import contextlib
+from typing import Any, Callable, Dict, Iterable, List, Tuple, Union
+
+from transformers.modeling_utils import TORCH_INIT_FUNCTIONS
+
 
 ipex_available = importlib.util.find_spec("intel_extension_for_pytorch") is not None
 try:
@@ -144,6 +148,35 @@ def get_lowest_memory_device_index():
             curr_device_memory_pct = device_memory_pct
 
     return device
+
+
+@contextlib.contextmanager
+def patch_attr(base: object, attr: str, value: Any):
+    """
+    Patch the value of an object attribute. Original value is restored upon exit
+
+    :param base: object which has the attribute to patch
+    :param attr: name of the the attribute to patch
+    :param value: used to replace original value
+
+    Usage:
+    >>> from types import SimpleNamespace
+    >>> obj = SimpleNamespace()
+    >>> with patch_attr(obj, "attribute", "value"):
+    ...     assert obj.attribute == "value"
+    >>> assert not hasattr(obj, "attribute")
+    """
+    _sentinel = object()
+    original_value = getattr(base, attr, _sentinel)
+
+    setattr(base, attr, value)
+    try:
+        yield
+    finally:
+        if original_value is not _sentinel:
+            setattr(base, attr, original_value)
+        else:
+            delattr(base, attr)
 
 
 @contextlib.contextmanager

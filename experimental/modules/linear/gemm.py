@@ -5,7 +5,7 @@ import torch.nn as nn
 
 class WQ8Linear_GEMM(nn.Module):
     def __init__(
-        self, w_bit, group_size, in_features, out_features, bias, dev, training=False
+        self, w_bit, group_size, in_features, out_features, bias, dev, training=False, float16_scale=False
     ):
         super().__init__()
     
@@ -33,7 +33,7 @@ class WQ8Linear_GEMM(nn.Module):
             "weight_scale",
             torch.zeros(
                 (out_features, in_features // self.group_size),
-                dtype=torch.float16,
+                dtype=torch.float16 if float16_scale else torch.float32,
                 device=dev,
             ),
         )
@@ -42,7 +42,7 @@ class WQ8Linear_GEMM(nn.Module):
                 "bias",
                 torch.zeros(
                     (out_features),
-                    dtype=torch.float16,
+                    dtype=torch.float16 if float16_scale else torch.float32,
                     device=dev,
                 ),
             )
@@ -68,9 +68,9 @@ class WQ8Linear_GEMM(nn.Module):
         if init_only:  # just prepare for loading sd
             return awq_linear
 
-        awq_linear.weight_scale[:] = scales.half()
+        awq_linear.weight_scale[:] = scales.half() if awq_linear.weight_scale.dtype == torch.float16 else scales
         if linear.bias is not None:
-            awq_linear.bias[:] = linear.bias.half()
+            awq_linear.bias[:] = linear.bias.half() if awq_linear.bias.dtype == torch.float16 else linear.bias
 
         awq_linear.weight[:] = (linear.weight.data / awq_linear.weight_scale).round().to(torch.int8)
         return awq_linear
@@ -97,7 +97,7 @@ class WQ4Linear_GEMM(nn.Module):
         super().__init__()
     
         if w_bit not in [4]:
-            raise NotImplementedError("Only 4-bit and 8-bit are supported for WQ8Linear_GEMM.")
+            raise NotImplementedError("Only 4-bit are supported for WQ4Linear_GEMM.")
 
         self.in_features = in_features
         self.out_features = out_features

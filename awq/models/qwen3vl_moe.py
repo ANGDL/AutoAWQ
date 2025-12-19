@@ -2,6 +2,7 @@ import tqdm
 from typing import List, Tuple
 
 from torch import nn
+import torch
 
 from .base import BaseAWQForCausalLM
 from awq.utils.utils import skip_weights_initialize
