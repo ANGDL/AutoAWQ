@@ -87,7 +87,7 @@ class SequentialQwen3VLMoeTextExperts(torch.nn.ModuleList):
         self.num_experts = original.gate_up_proj.shape[0]
         with skip_weights_initialize():
             super().__init__(
-                [Qwen3VLMoeTextMLP(config) for _ in range(self.num_experts)]
+                [Qwen3VLMoeTextMLP(config, intermediate_size=config.moe_intermediate_size) for _ in range(self.num_experts)]
             )
 
         intermediate_size = original.down_proj.shape[1]
