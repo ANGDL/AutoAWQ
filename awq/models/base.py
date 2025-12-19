@@ -222,7 +222,7 @@ class BaseAWQForCausalLM(nn.Module):
         self.quant_config: AwqConfig = AwqConfig.from_dict(quant_config)
 
         if hasattr(self, "modules_to_not_convert"):
-            self.quant_config.modules_to_not_convert = self.modules_to_not_convert
+            self.quant_config.modules_to_not_convert.extend(self.modules_to_not_convert)
 
         self.quantizer = quantizer_cls(
             self,
