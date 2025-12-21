@@ -54,7 +54,7 @@ def append_str_prefix(x, prefix):
         return x
 
 
-def exclude_layers_to_not_quantize(linear_layers, modules_to_not_convert, updated_not_convert_layers):
+def exclude_layers_to_not_quantize(linear_layers, modules_to_not_convert, updated_not_convert_layers=[], prefix=""):
     if modules_to_not_convert is None:
         return linear_layers
 
@@ -73,8 +73,12 @@ def exclude_layers_to_not_quantize(linear_layers, modules_to_not_convert, update
                     should_exclude = True
                     break
         
+        full_name = append_str_prefix(name, prefix + '.')
+        if full_name in modules_to_not_convert or prefix in modules_to_not_convert:
+            should_exclude = True
+        
         if not should_exclude:
             filtered_layers[name] = linear_layer
         else:
-            updated_not_convert_layers.append(name)
+            updated_not_convert_layers.append(full_name)
     return filtered_layers

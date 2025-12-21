@@ -654,7 +654,7 @@ class BaseAWQForCausalLM(nn.Module):
 
             # Filter out the linear layers we don't want to include
             named_linears = exclude_layers_to_not_quantize(
-                named_linears, quant_config.modules_to_not_convert
+                named_linears, quant_config.modules_to_not_convert, [], get_op_name(model, layer)
             )
 
             # Replace activation functions

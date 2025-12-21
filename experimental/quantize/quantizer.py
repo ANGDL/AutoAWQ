@@ -172,11 +172,9 @@ class ExpandedQuantizer(BaseQuantizer):
                 # Filter out the linear layers we don't want to exclude
                 not_converted_layers = []
                 named_linears = exclude_layers_to_not_quantize(
-                    named_linears, self.modules_to_not_convert, not_converted_layers
+                    named_linears, self.modules_to_not_convert, not_converted_layers, layer_name
                 )
-                self.not_converted_layers.extend(
-                    append_str_prefix(not_converted_layers, layer_name + ".")
-                )
+                self.not_converted_layers.extend(not_converted_layers)
 
                 input_feat = self._get_input_feat(module, named_linears)
                 clear_memory()

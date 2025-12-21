@@ -192,11 +192,9 @@ class AwqQuantizer:
             # Filter out the linear layers we don't want to exclude
             not_converted_layers = []
             named_linears = exclude_layers_to_not_quantize(
-                named_linears, self.modules_to_not_convert, not_converted_layers
+                named_linears, self.modules_to_not_convert, not_converted_layers, get_op_name(self.model, self.modules[i])
             )
-            self.not_converted_layers.extend(append_str_prefix(
-                not_converted_layers, get_op_name(self.model, self.modules[i]) + "."
-            ))
+            self.not_converted_layers.extend(not_converted_layers)
 
             input_feat = self._get_input_feat(self.modules[i], named_linears)
             clear_memory()
@@ -234,7 +232,7 @@ class AwqQuantizer:
         for i in tqdm(range(len(self.modules)), desc="Packing"):
             named_linears = get_named_linears(self.modules[i])
             named_linears = exclude_layers_to_not_quantize(
-                named_linears, self.modules_to_not_convert
+                named_linears, self.modules_to_not_convert, [], get_op_name(self.model, self.modules[i])
             )
             self._apply_quant(self.modules[i], named_linears)
             clear_memory()
