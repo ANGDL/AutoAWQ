@@ -198,6 +198,9 @@ class AwqQuantizer:
 
             input_feat = self._get_input_feat(self.modules[i], named_linears)
             clear_memory()
+            
+            if not named_linears:
+                continue
 
             # [STEP 2]: Compute and apply scale list
             module_config: List[Dict] = self.awq_model.get_layers_for_scaling(

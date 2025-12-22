@@ -179,6 +179,9 @@ class ExpandedQuantizer(BaseQuantizer):
                 input_feat = self._get_input_feat(module, named_linears)
                 clear_memory()
 
+                if not named_linears:
+                    continue
+
                 # [STEP 2]: Compute/apply scale list or reuse cached artifacts
                 restored = False
                 scales_list_local: List[Tuple[str, Tuple[str, ...], torch.Tensor]] = []
