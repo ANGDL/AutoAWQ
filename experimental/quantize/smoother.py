@@ -61,7 +61,7 @@ class SmoothQuantizer(BaseQuantizer):
         )
 
     def _norm_scales(self, scales: torch.Tensor, alpha=6.0, beta=0.15) -> torch.Tensor:
-        if os.getenv("FORCE_AWQ_NORM_SCALE", "0") in ['1', 'true', 'True']:
+        if os.getenv("USE_AWQ_NORM_SCALE", "0") in ['1', 'true', 'True']:
             return super()._norm_scales(scales)
 
         below_one = scales < 1.0
@@ -82,6 +82,9 @@ class SmoothQuantizer(BaseQuantizer):
         module2inspect=None,
         kwargs={},
     ):
+        if os.getenv("USE_AWQ_SMOOTH_SCALE", "0") in ['1', 'true', 'True']:
+            return super()._search_best_scale(module, prev_op, layers, inp, module2inspect, kwargs)
+
         if module2inspect is None:
             assert len(layers) == 1
             module2inspect = layers[0]
