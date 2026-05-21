@@ -171,6 +171,7 @@ class SmoothQuantizer(BaseQuantizer):
             w = w.reshape(-1, group_size)
         assert w.dim() == 2
         assert torch.isnan(w).sum() == 0
+        assert torch.isinf(w).sum() == 0
 
         # zero point quantization
         if zero_point:

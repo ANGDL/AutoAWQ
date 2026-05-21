@@ -481,6 +481,9 @@ class AwqQuantizer:
 
         assert torch.isnan(best_scales).sum() == 0, best_scales
 
+        best_scales[torch.isinf(best_scales)] = 1
+        best_scales[torch.isnan(best_scales)] = 1
+
         return best_scales.detach().cpu()
 
     @torch.no_grad()
